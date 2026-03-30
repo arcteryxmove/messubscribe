@@ -176,8 +176,23 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
         await session.commit()
     except Exception:
         logger.exception("cb_pay")
-        await session.rollback()
-        await query.answer(T.error_generic(), show_alert=True)
+        try:
+            await session.rollback()
+        except Exception:
+            logger.exception("cb_pay rollback")
+        details = None
+        try:
+            import traceback
+
+            details = traceback.format_exc().splitlines()[-1]
+        except Exception:
+            details = None
+
+        if query.message:
+            await query.message.answer(T.payment_invoice_error(details))
+            await query.answer()
+        else:
+            await query.answer(T.error_generic(), show_alert=True)
 
 
 @router.pre_checkout_query()
