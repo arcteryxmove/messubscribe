@@ -6,6 +6,7 @@ import uuid
 from typing import Optional, Tuple
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -152,15 +153,25 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
             desc = T.invoice_description_full()
             payload = f"full:{user.id}"
 
-        await bot.send_invoice(
-            chat_id=query.message.chat.id,
-            title=title,
-            description=desc,
-            payload=payload,
-            provider_token=settings.payments_token,
-            currency="RUB",
-            prices=[LabeledPrice(label=title, amount=amount)],
-        )
+        if not query.message:
+            await query.answer(T.error_generic(), show_alert=True)
+            return
+        try:
+            await bot.send_invoice(
+                chat_id=query.message.chat.id,
+                title=title,
+                description=desc,
+                payload=payload,
+                provider_token=settings.payments_token,
+                currency="RUB",
+                prices=[LabeledPrice(label=title, amount=amount)],
+            )
+        except TelegramBadRequest as e:
+            logger.exception("send_invoice bad request")
+            await query.message.answer(T.payment_invoice_error(str(e)))
+            await query.answer()
+            await session.commit()
+            return
         await query.answer()
         await session.commit()
     except Exception:

@@ -89,6 +89,17 @@ def payments_not_configured() -> str:
     )
 
 
+def payment_invoice_error(details: Optional[str] = None) -> str:
+    base = (
+        "Не удалось открыть форму оплаты в Telegram. "
+        "Проверьте PAYMENTS_TOKEN в Railway (из BotFather -> Payments) "
+        "и что для бота подключен провайдер ЮKassa."
+    )
+    if details:
+        return f"{base}\n\nТех.детали: <code>{details[:180]}</code>"
+    return base
+
+
 def trial_used_only_full() -> str:
     return (
         "Пробный период на ваш аккаунт уже использован — "
