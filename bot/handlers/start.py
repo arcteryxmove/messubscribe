@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 router = Router(name="start")
 
 
+def _fallback_start_view() -> tuple[str, object]:
+    """
+    Резервный стартовый экран, если БД временно недоступна.
+    Позволяет пользователю продолжить сценарий вместо общей ошибки.
+    """
+    text = f"<b>{T.welcome_title()}</b>\n\n{T.welcome_body()}"
+    markup = kb.kb_start_main(has_active=False, trial_available=True)
+    return text, markup
+
+
 async def _render_start(
     session: AsyncSession,
     *,
@@ -69,8 +79,13 @@ async def cmd_start(message: Message, session: AsyncSession) -> None:
         await session.commit()
     except Exception:
         logger.exception("cmd_start")
-        await session.rollback()
-        await message.answer(T.error_generic())
+        try:
+            await session.rollback()
+        except Exception:
+            logger.exception("cmd_start rollback")
+        # Резерв: вместо ошибки показываем стартовый экран.
+        text, markup = _fallback_start_view()
+        await message.answer(text, reply_markup=markup)
 
 
 @router.message(Command("reset"))
@@ -113,5 +128,11 @@ async def cb_back_start(query: CallbackQuery, session: AsyncSession) -> None:
         await session.commit()
     except Exception:
         logger.exception("back_start")
-        await session.rollback()
-        await query.answer(T.error_generic(), show_alert=True)
+        try:
+            await session.rollback()
+        except Exception:
+            logger.exception("back_start rollback")
+        text, markup = _fallback_start_view()
+        if query.message:
+            await query.message.edit_text(text, reply_markup=markup)
+        await query.answer()
