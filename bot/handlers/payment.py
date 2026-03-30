@@ -33,6 +33,9 @@ def _parse_payload(payload: str) -> Optional[Tuple[str, int]]:
     if len(parts) != 2:
         return None
     kind, uid_s = parts
+    # Поддержка payload вида "kind:tg:<id>"
+    if uid_s.startswith("tg:"):
+        uid_s = uid_s[3:]
     try:
         return kind, int(uid_s)
     except ValueError:
@@ -109,25 +112,42 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
         uid = query.from_user.id if query.from_user else 0
         un = query.from_user.username if query.from_user else None
         fn = query.from_user.full_name if query.from_user else ""
-        user = await crud.get_or_create_user(
-            session,
-            telegram_id=uid,
-            username=un,
-            full_name=fn,
-        )
-        if user.is_banned:
-            await query.answer(T.banned_message(), show_alert=True)
-            return
-
         is_trial = query.data == "pay_trial"
-        if is_trial and await crud.has_used_trial_offer(session, user.id):
-            await query.message.answer(T.trial_used_only_full())
-            await query.answer()
-            await session.commit()
-            return
+
+        user: Optional[User] = None
+        # Важный момент: если БД недоступна/схема не совпала, не блокируем открытие invoice.
+        try:
+            user = await crud.get_or_create_user(
+                session,
+                telegram_id=uid,
+                username=un,
+                full_name=fn,
+            )
+            if user.is_banned:
+                await query.answer(T.banned_message(), show_alert=True)
+                return
+
+            if is_trial and await crud.has_used_trial_offer(session, user.id):
+                await query.message.answer(T.trial_used_only_full())
+                await query.answer()
+                await session.commit()
+                return
+        except Exception:
+            logger.exception("db checks failed in cb_pay; continue with invoice")
+            try:
+                await session.rollback()
+            except Exception:
+                logger.exception("cb_pay rollback after db checks failure")
 
         # Без PAYMENTS_TOKEN — тот же сценарий, что после оплаты (для просмотра UX)
         if settings.use_mock_payments:
+            if not user:
+                user = await crud.get_or_create_user(
+                    session,
+                    telegram_id=uid,
+                    username=un,
+                    full_name=fn,
+                )
             kind = "trial" if is_trial else "full"
             mock_id = f"mock:{kind}:{user.id}:{uuid.uuid4().hex[:12]}"
             text = await process_successful_order(
@@ -154,12 +174,12 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
             amount = settings.trial_amount_kopecks
             title = T.invoice_title_trial()
             desc = T.invoice_description_trial()
-            payload = f"trial:{user.id}"
+            payload = f"trial:tg:{uid}"
         else:
             amount = settings.subscription_amount_kopecks
             title = T.invoice_title_full()
             desc = T.invoice_description_full()
-            payload = f"full:{user.id}"
+            payload = f"full:tg:{uid}"
 
         if not query.message:
             await query.answer(T.error_generic(), show_alert=True)
@@ -205,12 +225,11 @@ async def pre_checkout(query: PreCheckoutQuery, session: AsyncSession) -> None:
         if not parsed:
             await query.answer(ok=False, error_message=T.pre_checkout_error())
             return
-        kind, user_db_id = parsed
+        kind, telegram_id = parsed
         if not query.from_user:
             await query.answer(ok=False, error_message=T.pre_checkout_error())
             return
-        user = await session.get(User, user_db_id)
-        if not user or user.telegram_id != query.from_user.id:
+        if telegram_id != query.from_user.id:
             await query.answer(ok=False, error_message=T.pre_checkout_error())
             return
 
@@ -223,9 +242,15 @@ async def pre_checkout(query: PreCheckoutQuery, session: AsyncSession) -> None:
             await query.answer(ok=False, error_message=T.pre_checkout_error())
             return
 
-        if kind == "trial" and await crud.has_used_trial_offer(session, user.id):
-            await query.answer(ok=False, error_message=T.pre_checkout_error())
-            return
+        # Проверка trial по БД (если БД временно недоступна — не блокируем pre-checkout)
+        if kind == "trial":
+            try:
+                user = await crud.get_user_by_telegram_id(session, telegram_id)
+                if user and await crud.has_used_trial_offer(session, user.id):
+                    await query.answer(ok=False, error_message=T.pre_checkout_error())
+                    return
+            except Exception:
+                logger.exception("pre_checkout trial check failed; skip")
 
         await query.answer(ok=True)
     except Exception:
@@ -244,11 +269,16 @@ async def successful_payment(message: Message, session: AsyncSession, bot: Bot) 
         if not parsed:
             await message.answer(T.error_generic())
             return
-        kind, user_db_id = parsed
-        user = await session.get(User, user_db_id)
-        if not user or user.telegram_id != message.from_user.id:
+        kind, telegram_id = parsed
+        if telegram_id != message.from_user.id:
             await message.answer(T.error_generic())
             return
+        user = await crud.get_or_create_user(
+            session,
+            telegram_id=telegram_id,
+            username=message.from_user.username if message.from_user else None,
+            full_name=message.from_user.full_name if message.from_user else "",
+        )
 
         provider_pid = sp.provider_payment_charge_id or sp.telegram_payment_charge_id
         text = await process_successful_order(
