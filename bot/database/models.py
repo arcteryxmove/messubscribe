@@ -7,14 +7,16 @@ from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy.sql import func
-
 if TYPE_CHECKING:
     pass
 
 
 class Base(DeclarativeBase):
     pass
+
+
+def _utcnow() -> datetime:
+    return datetime.utcnow()
 
 
 class SubscriptionStatus(str, enum.Enum):
@@ -39,7 +41,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(512), default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
+        default=_utcnow,
     )
     is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -127,7 +129,7 @@ class Payment(Base):
     is_trial: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        server_default=func.now(),
+        default=_utcnow,
     )
     paid_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
