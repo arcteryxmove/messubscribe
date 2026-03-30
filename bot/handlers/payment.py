@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 router = Router(name="payment")
 
 
+def _error_details(exc: Exception) -> str:
+    text = f"{exc.__class__.__name__}: {exc}"
+    orig = getattr(exc, "orig", None)
+    if orig:
+        text = f"{text} | orig={orig}"
+    return text
+
+
 def _parse_payload(payload: str) -> Optional[Tuple[str, int]]:
     parts = payload.split(":", 1)
     if len(parts) != 2:
@@ -168,25 +176,19 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
             )
         except TelegramBadRequest as e:
             logger.exception("send_invoice bad request")
-            await query.message.answer(T.payment_invoice_error(str(e)))
+            await query.message.answer(T.payment_invoice_error(_error_details(e)))
             await query.answer()
             await session.commit()
             return
         await query.answer()
         await session.commit()
-    except Exception:
+    except Exception as e:
         logger.exception("cb_pay")
         try:
             await session.rollback()
         except Exception:
             logger.exception("cb_pay rollback")
-        details = None
-        try:
-            import traceback
-
-            details = traceback.format_exc().splitlines()[-1]
-        except Exception:
-            details = None
+        details = _error_details(e)
 
         if query.message:
             await query.message.answer(T.payment_invoice_error(details))
