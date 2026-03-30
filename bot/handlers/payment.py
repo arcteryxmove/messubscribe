@@ -42,6 +42,16 @@ def _parse_payload(payload: str) -> Optional[Tuple[str, int]]:
         return None
 
 
+def _effective_trial_amount(settings) -> int:
+    """
+    Для реального Telegram Payments часть провайдеров/режимов не принимает 1 ₽.
+    Если платежи реальные, поднимаем trial до минимально безопасной суммы 10 ₽.
+    """
+    if settings.payments_configured and settings.trial_amount_kopecks < 1000:
+        return 1000
+    return settings.trial_amount_kopecks
+
+
 async def process_successful_order(
     session: AsyncSession,
     bot: Bot,
@@ -71,7 +81,7 @@ async def process_successful_order(
             session,
             user_id=user.id,
             subscription_id=sub.id,
-            amount=settings.trial_amount_kopecks,
+            amount=_effective_trial_amount(settings),
             yookassa_payment_id=str(payment_external_id),
             is_trial=True,
         )
@@ -171,7 +181,7 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
             return
 
         if is_trial:
-            amount = settings.trial_amount_kopecks
+            amount = _effective_trial_amount(settings)
             title = T.invoice_title_trial()
             desc = T.invoice_description_trial()
             payload = f"trial:tg:{uid}"
@@ -234,7 +244,7 @@ async def pre_checkout(query: PreCheckoutQuery, session: AsyncSession) -> None:
             return
 
         expected = (
-            settings.trial_amount_kopecks
+            _effective_trial_amount(settings)
             if kind == "trial"
             else settings.subscription_amount_kopecks
         )
