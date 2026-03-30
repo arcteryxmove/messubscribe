@@ -111,7 +111,7 @@ async def create_checkout_payment(
                 "kind": kind,
             },
         }
-        p = Payment.create(body, idempotence_key=str(uuid.uuid4()))
+        p = Payment.create(body, str(uuid.uuid4()))
         if isinstance(p, dict):
             confirmation = p.get("confirmation") or {}
             return {
