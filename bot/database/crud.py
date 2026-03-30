@@ -314,6 +314,16 @@ async def mark_payment_failed(session: AsyncSession, payment_id: int) -> None:
     )
 
 
+async def get_payment_by_yookassa_id(
+    session: AsyncSession,
+    yookassa_payment_id: str,
+) -> Optional[Payment]:
+    r = await session.execute(
+        select(Payment).where(Payment.yookassa_payment_id == yookassa_payment_id),
+    )
+    return r.scalar_one_or_none()
+
+
 async def create_trial_subscription(
     session: AsyncSession,
     *,

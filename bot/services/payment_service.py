@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -78,6 +79,49 @@ async def create_recurring_payment(
             "description": description[:128],
         }
         return _payment_to_dict(Payment.create(body, idempotence_key))
+
+    return await asyncio.to_thread(_sync)
+
+
+async def create_checkout_payment(
+    *,
+    amount_kopecks: int,
+    description: str,
+    user_telegram_id: int,
+    kind: str,
+    return_url: str = "https://t.me",
+) -> dict[str, Any]:
+    """
+    Создание платежа ЮKassa с редиректом на внешнюю страницу оплаты.
+    Возвращает словарь: id/status/confirmation_url.
+    """
+    if not get_settings().yookassa_configured:
+        raise RuntimeError("ЮKassa не настроена")
+
+    def _sync() -> dict[str, Any]:
+        _configure()
+        body = {
+            "amount": {"value": _format_amount_rub(amount_kopecks), "currency": "RUB"},
+            "capture": True,
+            "save_payment_method": True,
+            "confirmation": {"type": "redirect", "return_url": return_url},
+            "description": description[:128],
+            "metadata": {
+                "user_telegram_id": str(user_telegram_id),
+                "kind": kind,
+            },
+        }
+        p = Payment.create(body, idempotence_key=str(uuid.uuid4()))
+        if isinstance(p, dict):
+            confirmation = p.get("confirmation") or {}
+            return {
+                "id": p.get("id"),
+                "status": p.get("status"),
+                "confirmation_url": confirmation.get("confirmation_url"),
+            }
+        confirmation = getattr(p, "confirmation", None)
+        c_url = getattr(confirmation, "confirmation_url", None) if confirmation else None
+        return {"id": getattr(p, "id", None), "status": getattr(p, "status", None), "confirmation_url": c_url}
 
     return await asyncio.to_thread(_sync)
 

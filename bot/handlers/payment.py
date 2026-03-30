@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import get_settings
 from bot.database import crud
+from bot.database.models import PaymentStatus
 from bot.database.models import User
+from bot.keyboards import inline as kb
 from bot.services import payment_service, subscription_service
 from bot.texts import messages as T
 
@@ -195,17 +197,39 @@ async def cb_pay(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
             await query.answer(T.error_generic(), show_alert=True)
             return
         try:
-            await bot.send_invoice(
-                chat_id=query.message.chat.id,
-                title=title,
+            # Внешний сценарий: создаём redirect-платёж ЮKassa и отдаём ссылку.
+            checkout = await payment_service.create_checkout_payment(
+                amount_kopecks=amount,
                 description=desc,
-                payload=payload,
-                provider_token=settings.payments_token,
-                currency="RUB",
-                prices=[LabeledPrice(label=title, amount=amount)],
+                user_telegram_id=uid,
+                kind="trial" if is_trial else "full",
+                return_url="https://t.me",
+            )
+            yid = str(checkout.get("id") or "")
+            confirmation_url = str(checkout.get("confirmation_url") or "")
+            if not yid or not confirmation_url:
+                raise RuntimeError("ЮKassa не вернула id/confirmation_url")
+            if user:
+                await crud.create_pending_payment(
+                    session,
+                    user_id=user.id,
+                    subscription_id=None,
+                    amount=amount,
+                    yookassa_payment_id=yid,
+                    is_trial=is_trial,
+                )
+            await query.message.answer(
+                T.yookassa_checkout_prompt(),
+                reply_markup=kb.kb_yookassa_checkout(confirmation_url, yid),
             )
         except TelegramBadRequest as e:
             logger.exception("send_invoice bad request")
+            await query.message.answer(T.payment_invoice_error(_error_details(e)))
+            await query.answer()
+            await session.commit()
+            return
+        except Exception as e:
+            logger.exception("create checkout payment failed")
             await query.message.answer(T.payment_invoice_error(_error_details(e)))
             await query.answer()
             await session.commit()
@@ -305,3 +329,59 @@ async def successful_payment(message: Message, session: AsyncSession, bot: Bot) 
         logger.exception("successful_payment")
         await session.rollback()
         await message.answer(T.error_generic())
+
+
+@router.callback_query(F.data.startswith("check_pay:"))
+async def cb_check_payment(query: CallbackQuery, session: AsyncSession, bot: Bot) -> None:
+    try:
+        if not query.from_user:
+            await query.answer()
+            return
+        yid = query.data.split(":", 1)[1]
+        user = await crud.get_user_by_telegram_id(session, query.from_user.id)
+        if not user:
+            await query.answer(T.payment_check_failed(), show_alert=True)
+            return
+        pay = await crud.get_payment_by_yookassa_id(session, yid)
+        if not pay or pay.user_id != user.id:
+            await query.answer(T.payment_check_failed(), show_alert=True)
+            return
+        if pay.status == PaymentStatus.succeeded:
+            await query.answer("Платёж уже подтверждён.")
+            return
+
+        status = await payment_service.get_payment_status(yid)
+        if status == "succeeded":
+            text = await process_successful_order(
+                session,
+                bot,
+                user,
+                kind="trial" if pay.is_trial else "full",
+                payment_external_id=yid,
+                fetch_yookassa_method=True,
+            )
+            await crud.mark_payment_succeeded(session, pay.id)
+            await session.commit()
+            if query.message:
+                await query.message.answer(text)
+            await query.answer("Оплата подтверждена")
+            return
+
+        if status in ("canceled", "failed"):
+            await crud.mark_payment_failed(session, pay.id)
+            await session.commit()
+            await query.answer(T.payment_check_failed(), show_alert=True)
+            return
+
+        await query.answer(T.payment_pending_check_later(), show_alert=True)
+    except Exception as e:
+        logger.exception("cb_check_payment")
+        try:
+            await session.rollback()
+        except Exception:
+            logger.exception("cb_check_payment rollback")
+        if query.message:
+            await query.message.answer(T.payment_invoice_error(_error_details(e)))
+            await query.answer()
+        else:
+            await query.answer(T.error_generic(), show_alert=True)

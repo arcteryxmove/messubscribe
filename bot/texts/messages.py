@@ -89,6 +89,21 @@ def payments_not_configured() -> str:
     )
 
 
+def yookassa_checkout_prompt() -> str:
+    return (
+        "Нажмите кнопку ниже, чтобы перейти на страницу оплаты ЮKassa.\n"
+        "После оплаты вернитесь в бот и нажмите «Проверить оплату»."
+    )
+
+
+def payment_pending_check_later() -> str:
+    return "Платёж ещё не подтверждён. Оплатите по ссылке и нажмите «Проверить оплату» снова."
+
+
+def payment_check_failed() -> str:
+    return "Не удалось проверить платёж. Попробуйте ещё раз через несколько секунд."
+
+
 def payment_invoice_error(details: Optional[str] = None) -> str:
     base = (
         "Не удалось открыть форму оплаты в Telegram. "

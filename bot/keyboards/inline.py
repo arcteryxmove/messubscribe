@@ -96,6 +96,15 @@ def kb_pay_manual() -> InlineKeyboardMarkup:
     )
 
 
+def kb_yookassa_checkout(url: str, payment_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Оплатить в ЮKassa", url=url)],
+            [InlineKeyboardButton(text="Проверить оплату", callback_data=f"check_pay:{payment_id}")],
+        ],
+    )
+
+
 def kb_admin() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
