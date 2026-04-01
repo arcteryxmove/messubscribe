@@ -152,6 +152,7 @@ async def cb_cancel_yes(query: CallbackQuery, session: AsyncSession) -> None:
         sub = await crud.get_active_subscription(session, user.id)
         if sub:
             await crud.cancel_subscription_user(session, sub)
+        await crud.update_user_payment_method(session, user.id, None)
         await msg.edit_text(T.cancel_done())
         await query.answer()
         await session.commit()
